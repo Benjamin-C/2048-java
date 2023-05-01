@@ -25,6 +25,7 @@ public class Game {
     private int width = 4;
     private int height = 4;
     private int numbers[][];
+    private List<int[][]> history;
     private NumberLabel boxes[][];
     private int boxSize = 256;
     private double twoChance = 0.75;
@@ -32,7 +33,8 @@ public class Game {
     private Object gosyncro = new Object();
     private Object kpsyncro = new Object();
     private Direction move;
-    
+    private Action act;
+
     public Game() {
         ColorMap.initColorMap();
         numbers = new int[height][width];
@@ -40,6 +42,8 @@ public class Game {
 
         JFrame jf = new JFrame();
         jf.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+        history = new ArrayList<int[][]>();
 
         JPanel jp =  new JPanel();
         jp.setLayout(new GridLayout(4, 4));
@@ -68,6 +72,7 @@ public class Game {
             }
         
             public void keyReleased(KeyEvent e) {
+                act = Action.MOVE;
                 if(e.getKeyCode()== KeyEvent.VK_RIGHT) {
                     move = Direction.RIGHT;
                 } else if(e.getKeyCode()== KeyEvent.VK_LEFT) {
@@ -76,11 +81,16 @@ public class Game {
                     move = Direction.DOWN;
                 } else if(e.getKeyCode()== KeyEvent.VK_UP) {
                     move = Direction.UP;
+                } else if(e.getKeyCode() == KeyEvent.VK_R) {
+                    act = Action.RESTART;
+                    synchronized(gosyncro) {
+                        gosyncro.notifyAll();
+                    } 
                 } else {
                     return;
                 }
                 synchronized(kpsyncro) {
-                    kpsyncro.notify();
+                    kpsyncro.notifyAll();
                 }
             }
             public void keyTyped(KeyEvent e) {
@@ -93,47 +103,37 @@ public class Game {
         while(true) {
             playGame();
         }
+    }
 
-        // while(true) {
-        //     int fn = 0;
-        //     boolean dead = false;
-        //     while(!dead) {
-        //         slide(Direction.RIGHT);
-        //         dead = addNumber();
-        //         regenBoxes();
-        //         BufferedImage img = new BufferedImage(jf.getWidth(), jf.getHeight(), BufferedImage.TYPE_INT_RGB);
-        //         jf.paint(img.getGraphics());
-        //         File outputfile = new File("sc/sc" + fn++ + ".png");
-        //         try {
-        //             ImageIO.write(img, "png", outputfile);
-        //         } catch (IOException e) {
-        //             // TODO Auto-generated catch block
-        //             e.printStackTrace();
-        //         }
-        //         try {
-        //             Thread.sleep(2000);
-        //         } catch (InterruptedException e) {
-        //             e.printStackTrace();
-        //         }
-        //         clearMarkers();
-        //     }
+    public void saveToHistory() {
+        int arr[][] = new int[height][width];
+        for(int r = 0; r < height; r++) {
+            for(int c = 0; c < width; c++) {
+                arr[r][c] = numbers[r][c];
+            }
+        }
+        history.add(arr);
+    }
 
-        //     gameOver();
+    public void loadFromHistory() {
+        loadFromHistory(1);
+    }
 
-        //     synchronized(gosyncro) {
-        //         try {
-        //             gosyncro.wait();
-        //         } catch (InterruptedException e) {
-        //             // TODO Auto-generated catch block
-        //             e.printStackTrace();
-        //         }
-        //     }
-            
-        //     restartGame();
-        // }
+    public void loadFromHistory(int n) {
+        int index = history.size();
+        int[][] arr = history.get(index - 1 - n);
+        for(int r = 0; r < height; r++) {
+            for(int c = 0; c < width; c++) {
+                numbers[r][c] = arr[r][c];
+            }
+        }
     }
 
     public void playGame() {
+        restartGame();
+        addNumber();
+        addNumber();
+        regenBoxes();
         boolean alive = true;
         while(alive) {
             // wait for key
@@ -144,11 +144,22 @@ public class Game {
                     e.printStackTrace();
                 }
             }
-            if(move != null) {
-                clearMarkers();
-                slide(move);
-                alive = addNumber();
-                regenBoxes();
+            switch(act) {
+            case MOVE: {
+                if(move != null) {
+                    clearMarkers();
+                    if(slide(move)) {
+                        alive = addNumber();
+                    } else {
+                        alive = checkLegalMove();
+                    }
+                    regenBoxes();
+                }
+                history.add(numbers);
+            } break;
+            case RESTART: {
+                return;
+            }
             }
         }
         gameOver();
@@ -160,6 +171,24 @@ public class Game {
                 e.printStackTrace();
             }
         }
+    }
+
+    public boolean checkLegalMove() {
+        for(int r = 0; r < height-1; r++) {
+            for(int c = 0; c < width; c++){
+                if(numbers[r][c] == numbers[r+1][c]) {
+                    return true;
+                }
+            }
+        }
+        for(int r = 0; r < height; r++) {
+            for(int c = 0; c < width-1; c++){
+                if(numbers[r][c] == numbers[r][c+1]) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void clearMarkers() {
@@ -198,6 +227,7 @@ public class Game {
 
     public boolean slide(Direction dir) {
         // Scan each row
+        boolean changed = false;
         for(int sc = 0; sc < height; sc++) {
             for(int sr = width-1; sr > 0; sr--) {
                 for(int st = sr-1; st >= 0; st--) {
@@ -225,16 +255,15 @@ public class Game {
                             numbers[r][c]++;
                             numbers[tr][tc] = 0;
                             boxes[r][c].setMarkerColor(Color.GREEN);
-                            System.out.println("Merged");
                             if(debugAnimSpeed > 0) {
                                 boxes[r][c].setMarkerColor(null);
                                 boxes[tr][tc].setMarkerColor(null);
                                 repaintAll();
                                 regenBoxes();
                             }
+                            changed = true;
                             break;
                         } else if(numbers[tr][tc] > 0) {
-                            System.out.println(numbers[tr][tc] + "?" + numbers[r][c]);
                             if(debugAnimSpeed > 0) {
                                 boxes[r][c].setMarkerColor(null);
                                 boxes[tr][tc].setMarkerColor(null);
@@ -250,6 +279,7 @@ public class Game {
                             numbers[tr][tc] = 0;
                             boxes[r][c].setMarkerColor(Color.LIGHT_GRAY);
                             slid = true;
+                            changed = true;
                         }
                     }
                     if(debugAnimSpeed > 0) {
@@ -262,7 +292,7 @@ public class Game {
             }
         }
 
-        return false;
+        return changed;
     }
 
     public void restartGame() {
@@ -284,14 +314,22 @@ public class Game {
             public void actionPerformed(ActionEvent e) {
                 restartGame();
                 synchronized(gosyncro) {
-                    gosyncro.notify();
+                    gosyncro.notifyAll();
                 }
-                jd.dispose();
             }
         });
         jd.add(jb);
         jd.pack();
         jd.setVisible(true);
+        synchronized(gosyncro) {
+            try {
+                gosyncro.wait();
+            } catch (InterruptedException e1) {
+                // TODO Auto-generated catch block
+                e1.printStackTrace();
+            }
+        }
+        jd.dispose();
     }
 
     public int countFilledBoxes() {
